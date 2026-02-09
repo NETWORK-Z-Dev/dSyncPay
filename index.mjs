@@ -61,11 +61,11 @@ export default class dSyncPay {
         return `${this.domain}${this.basePath}${path}`;
     }
 
-    emit(event, data) {
+    async emit(event, data) {
         const callback = this.callbacks[event];
         if (callback) {
             try {
-                callback(data);
+                await callback(data);
             } catch (err) {
                 console.error("callback error:", err);
             }
@@ -318,13 +318,12 @@ export default class dSyncPay {
                 };
 
                 if (orderStatus === 'COMPLETED') {
-                    this.parent.emit('onPaymentCompleted', result);
+                    await this.parent.emit('onPaymentCompleted', result);
                 } else if (orderStatus === 'VOIDED' || orderStatus === 'CANCELLED') {
-                    this.parent.emit('onPaymentCancelled', result);
+                    await this.parent.emit('onPaymentCancelled', result);
                 } else {
-                    this.parent.emit('onPaymentFailed', result);
+                    await this.parent.emit('onPaymentFailed', result);
                 }
-
                 return result;
             } catch (error) {
                 this.parent.emit('onError', {

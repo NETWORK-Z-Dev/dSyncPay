@@ -30,6 +30,7 @@ export default class dSyncPay {
         this.domain = domain.endsWith('/') ? domain.slice(0, -1) : domain;
         this.basePath = basePath;
         this.redirects = redirects;
+        this.metadataCache = new Map();
 
         this.callbacks = {
             onPaymentCreated,
@@ -251,6 +252,14 @@ export default class dSyncPay {
                     rawResponse: response
                 };
 
+                // save metadata in cache
+                this.parent.metadataCache.set(response.id, metadata);
+
+                // auto cleanup after 1 hour if never verified
+                setTimeout(() => {
+                    this.parent.metadataCache.delete(response.id);
+                }, 60 * 60 * 1000);
+
                 this.parent.emit('onPaymentCreated', result);
                 return result;
             } catch (error) {
@@ -306,6 +315,9 @@ export default class dSyncPay {
                     amount = parseFloat(purchaseUnit.amount.value);
                 }
 
+                // get metadata from cache
+                const metadata = this.parent.metadataCache.get(orderId) || {};
+
                 const result = {
                     provider: 'paypal',
                     type: 'order',
@@ -314,6 +326,7 @@ export default class dSyncPay {
                     orderId: orderResponse.id,
                     amount: amount,
                     currency: purchaseUnit.payments?.captures?.[0]?.amount?.currency_code || purchaseUnit.amount?.currency_code || 'EUR',
+                    metadata,
                     rawResponse: orderResponse
                 };
 
@@ -324,6 +337,10 @@ export default class dSyncPay {
                 } else {
                     await this.parent.emit('onPaymentFailed', result);
                 }
+
+                // cleanup cache after verify
+                this.parent.metadataCache.delete(orderId);
+
                 return result;
             } catch (error) {
                 this.parent.emit('onError', {
@@ -332,6 +349,10 @@ export default class dSyncPay {
                     orderId,
                     error: error.response || error.message
                 });
+
+                // cleanup cache after verify
+                this.parent.metadataCache.delete(orderId);
+
                 throw error;
             }
         }
@@ -480,6 +501,14 @@ export default class dSyncPay {
                     rawResponse: response
                 };
 
+                // save metadata in cache
+                this.parent.metadataCache.set(response.id, metadata);
+
+                // auto cleanup after 1 hour if never verified
+                setTimeout(() => {
+                    this.parent.metadataCache.delete(response.id);
+                }, 60 * 60 * 1000);
+
                 this.parent.emit('onSubscriptionCreated', result);
                 return result;
             } catch (error) {
@@ -505,6 +534,9 @@ export default class dSyncPay {
                     }
                 );
 
+                // get metadata from cache
+                const metadata = this.parent.metadataCache.get(subscriptionId) || {};
+
                 const result = {
                     provider: 'paypal',
                     type: 'subscription',
@@ -512,14 +544,18 @@ export default class dSyncPay {
                     subscriptionId: response.id,
                     planId: response.plan_id,
                     customId: response.custom_id,
+                    metadata,
                     rawResponse: response
                 };
 
                 if (response.status === 'ACTIVE') {
-                    this.parent.emit('onSubscriptionActivated', result);
+                    await this.parent.emit('onSubscriptionActivated', result);
                 } else if (response.status === 'CANCELLED') {
-                    this.parent.emit('onSubscriptionCancelled', result);
+                    await this.parent.emit('onSubscriptionCancelled', result);
                 }
+
+                // cleanup cache after verify
+                this.parent.metadataCache.delete(subscriptionId);
 
                 return result;
             } catch (error) {
@@ -529,6 +565,10 @@ export default class dSyncPay {
                     subscriptionId,
                     error: error.response || error.message
                 });
+
+                // cleanup cache after verify
+                this.parent.metadataCache.delete(subscriptionId);
+
                 throw error;
             }
         }
@@ -549,15 +589,22 @@ export default class dSyncPay {
                     }
                 );
 
+                // get metadata from cache
+                const metadata = this.parent.metadataCache.get(subscriptionId) || {};
+
                 const result = {
                     provider: 'paypal',
                     type: 'subscription',
                     subscriptionId,
                     status: 'CANCELLED',
-                    reason
+                    reason,
+                    metadata
                 };
 
-                this.parent.emit('onSubscriptionCancelled', result);
+                // cleanup cache
+                this.parent.metadataCache.delete(subscriptionId);
+
+                await this.parent.emit('onSubscriptionCancelled', result);
                 return result;
             } catch (error) {
                 this.parent.emit('onError', {
@@ -566,6 +613,10 @@ export default class dSyncPay {
                     subscriptionId,
                     error: error.response || error.message
                 });
+
+                // cleanup cache on error too
+                this.parent.metadataCache.delete(subscriptionId);
+
                 throw error;
             }
         }
@@ -675,11 +726,11 @@ export default class dSyncPay {
                 };
 
                 if (latestStatus === 'COMPLETED') {
-                    this.parent.emit('onPaymentCompleted', result);
+                    await this.parent.emit('onPaymentCompleted', result);
                 } else if (latestStatus === 'CANCELED') {
-                    this.parent.emit('onPaymentCancelled', result);
+                    await this.parent.emit('onPaymentCancelled', result);
                 } else if (latestStatus === 'EXPIRED' || latestStatus === 'UNRESOLVED') {
-                    this.parent.emit('onPaymentFailed', result);
+                    await this.parent.emit('onPaymentFailed', result);
                 }
 
                 return result;
@@ -724,7 +775,7 @@ export default class dSyncPay {
         });
     }
 
-    registerRoutes(basePath = '/payments') { 
+    registerRoutes(basePath = '/payments') {
         if (this.paypal) {
             this.app.get(`${basePath}/paypal/verify`, async (req, res) => {
                 try {

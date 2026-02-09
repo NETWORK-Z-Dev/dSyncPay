@@ -2,21 +2,27 @@ import crypto from "crypto";
 
 export default class dSyncPay {
     constructor({
-        app = null,
-        paypal = null,
-        coinbase = null,
-        onPaymentCreated = null,
-        onPaymentCompleted = null,
-        onPaymentFailed = null,
-        onPaymentCancelled = null,
-        onSubscriptionCreated = null,
-        onSubscriptionActivated = null,
-        onSubscriptionCancelled = null,
-        onError = null
-    } = {}) {
+                    app = null,
+                    domain = null,
+                    basePath = '/payments',
+                    paypal = null,
+                    coinbase = null,
+                    onPaymentCreated = null,
+                    onPaymentCompleted = null,
+                    onPaymentFailed = null,
+                    onPaymentCancelled = null,
+                    onSubscriptionCreated = null,
+                    onSubscriptionActivated = null,
+                    onSubscriptionCancelled = null,
+                    onError = null
+                } = {}) {
         if (!app) throw new Error("missing express app instance");
+        if (!domain) throw new Error("missing domain");
 
         this.app = app;
+        this.domain = domain.endsWith('/') ? domain.slice(0, -1) : domain;
+        this.basePath = basePath;
+
         this.callbacks = {
             onPaymentCreated,
             onPaymentCompleted,
@@ -38,6 +44,12 @@ export default class dSyncPay {
             if (!coinbase.apiKey) throw new Error("missing coinbase.apiKey");
             this.coinbase = new this.Coinbase(this, coinbase);
         }
+
+        this.registerRoutes(basePath);
+    }
+
+    getUrl(path) {
+        return `${this.domain}${this.basePath}${path}`;
     }
 
     emit(event, data) {
@@ -80,7 +92,7 @@ export default class dSyncPay {
 
         const fetchOptions = {
             method,
-            headers: { ...headers }
+            headers: {...headers}
         };
 
         if (auth) {
@@ -97,7 +109,7 @@ export default class dSyncPay {
 
         const response = await fetch(finalUrl, fetchOptions);
         const text = await response.text();
-        
+
         if (!response.ok) {
             const error = new Error(`http error: ${response.status}`);
             error.status = response.status;
@@ -157,20 +169,18 @@ export default class dSyncPay {
         }
 
         async createOrder({
-            title,
-            description = 'no description',
-            price,
-            quantity = 1,
-            currency = 'EUR',
-            returnUrl,
-            cancelUrl,
-            customId = this.parent.generateId(),
-            metadata = {}
-        }) {
+                              title,
+                              description = 'no description',
+                              price,
+                              quantity = 1,
+                              currency = 'EUR',
+                              returnUrl = this.parent.getUrl('/paypal/verify'),
+                              cancelUrl = this.parent.getUrl('/cancel'),
+                              customId = this.parent.generateId(),
+                              metadata = {}
+                          }) {
             if (!title) throw new Error('missing title');
             if (!price) throw new Error('missing price');
-            if (!returnUrl) throw new Error('missing returnUrl');
-            if (!cancelUrl) throw new Error('missing cancelUrl');
 
             const accessToken = await this.getAccessToken();
             const totalAmount = (price * quantity).toFixed(2);
@@ -329,13 +339,13 @@ export default class dSyncPay {
         }
 
         async createPlan({
-            name,
-            description,
-            price,
-            currency = 'EUR',
-            interval = 'MONTH',
-            frequency = 1
-        }) {
+                             name,
+                             description,
+                             price,
+                             currency = 'EUR',
+                             interval = 'MONTH',
+                             frequency = 1
+                         }) {
             if (!name) throw new Error('missing name');
             if (!price) throw new Error('missing price');
 
@@ -402,15 +412,13 @@ export default class dSyncPay {
         }
 
         async createSubscription({
-            planId,
-            returnUrl,
-            cancelUrl,
-            customId = this.parent.generateId(),
-            metadata = {}
-        }) {
+                                     planId,
+                                     returnUrl = this.parent.getUrl('/paypal/subscription/verify'),
+                                     cancelUrl = this.parent.getUrl('/cancel'),
+                                     customId = this.parent.generateId(),
+                                     metadata = {}
+                                 }) {
             if (!planId) throw new Error('missing planId');
-            if (!returnUrl) throw new Error('missing returnUrl');
-            if (!cancelUrl) throw new Error('missing cancelUrl');
 
             const accessToken = await this.getAccessToken();
 
@@ -514,7 +522,7 @@ export default class dSyncPay {
                             "Content-Type": "application/json",
                             "Authorization": `Bearer ${accessToken}`
                         },
-                        body: { reason }
+                        body: {reason}
                     }
                 );
 
@@ -548,19 +556,17 @@ export default class dSyncPay {
         }
 
         async createCharge({
-            title,
-            description = 'no description',
-            price,
-            quantity = 1,
-            currency = 'EUR',
-            redirectUrl,
-            cancelUrl,
-            metadata = {}
-        }) {
+                               title,
+                               description = 'no description',
+                               price,
+                               quantity = 1,
+                               currency = 'EUR',
+                               redirectUrl = this.parent.getUrl('/coinbase/verify'),
+                               cancelUrl = this.parent.getUrl('/cancel'),
+                               metadata = {}
+                           }) {
             if (!title) throw new Error('missing title');
             if (!price) throw new Error('missing price');
-            if (!redirectUrl) throw new Error('missing redirectUrl');
-            if (!cancelUrl) throw new Error('missing cancelUrl');
 
             const totalAmount = (price * quantity).toFixed(2);
 
@@ -673,128 +679,47 @@ export default class dSyncPay {
         }
     }
 
-    registerRoutes({
-        basePath = '/payments',
-        canCreate = null,
-        canVerify = null,
-        onPaymentCreate = null,
-        onPaymentVerify = null
-    } = {}) {
-
-        const createMw = canCreate
-            ? async (req, res, next) => {
-                try {
-                    const allowed = await canCreate(req);
-                    if (!allowed) return res.status(403).json({ ok: false, error: 'forbidden' });
-                    next();
-                } catch (e) {
-                    return res.status(500).json({ ok: false, error: 'server_error' });
-                }
-            }
-            : (req, res, next) => next();
-
-        const verifyMw = canVerify
-            ? async (req, res, next) => {
-                try {
-                    const allowed = await canVerify(req);
-                    if (!allowed) return res.status(403).json({ ok: false, error: 'forbidden' });
-                    next();
-                } catch (e) {
-                    return res.status(500).json({ ok: false, error: 'server_error' });
-                }
-            }
-            : (req, res, next) => next();
-
+    registerRoutes(basePath = '/payments') {
         if (this.paypal) {
-            this.app.post(`${basePath}/paypal/order`, createMw, async (req, res) => {
-                try {
-                    const result = await this.paypal.createOrder(req.body);
-                    if (onPaymentCreate) await onPaymentCreate(req, result);
-                    res.json({ ok: true, ...result });
-                } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
-                }
-            });
-
-            this.app.get(`${basePath}/paypal/verify`, verifyMw, async (req, res) => {
+            this.app.get(`${basePath}/paypal/verify`, async (req, res) => {
                 try {
                     const orderId = req.query.token;
-                    if (!orderId) return res.status(400).json({ ok: false, error: 'missing_token' });
-                    
+                    if (!orderId) return res.status(400).json({ok: false, error: 'missing_token'});
+
                     const result = await this.paypal.verifyOrder(orderId);
-                    if (onPaymentVerify) await onPaymentVerify(req, result);
-                    res.json({ ok: true, ...result });
+                    res.json({ok: true, ...result});
                 } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
+                    res.status(500).json({ok: false, error: error.message});
                 }
             });
 
-            this.app.post(`${basePath}/paypal/plan`, createMw, async (req, res) => {
-                try {
-                    const result = await this.paypal.createPlan(req.body);
-                    res.json({ ok: true, ...result });
-                } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
-                }
-            });
-
-            this.app.post(`${basePath}/paypal/subscription`, createMw, async (req, res) => {
-                try {
-                    const result = await this.paypal.createSubscription(req.body);
-                    if (onPaymentCreate) await onPaymentCreate(req, result);
-                    res.json({ ok: true, ...result });
-                } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
-                }
-            });
-
-            this.app.get(`${basePath}/paypal/subscription/verify`, verifyMw, async (req, res) => {
+            this.app.get(`${basePath}/paypal/subscription/verify`, async (req, res) => {
                 try {
                     const subscriptionId = req.query.subscription_id;
-                    if (!subscriptionId) return res.status(400).json({ ok: false, error: 'missing_subscription_id' });
-                    
+                    if (!subscriptionId) return res.status(400).json({ok: false, error: 'missing_subscription_id'});
+
                     const result = await this.paypal.verifySubscription(subscriptionId);
-                    if (onPaymentVerify) await onPaymentVerify(req, result);
-                    res.json({ ok: true, ...result });
+                    res.json({ok: true, ...result});
                 } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
+                    res.status(500).json({ok: false, error: error.message});
                 }
             });
 
-            this.app.post(`${basePath}/paypal/subscription/cancel`, verifyMw, async (req, res) => {
-                try {
-                    const { subscriptionId, reason } = req.body;
-                    if (!subscriptionId) return res.status(400).json({ ok: false, error: 'missing_subscription_id' });
-                    
-                    const result = await this.paypal.cancelSubscription(subscriptionId, reason);
-                    res.json({ ok: true, ...result });
-                } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
-                }
+            this.app.get(`${basePath}/cancel`, async (req, res) => {
+                res.send('payment cancelled');
             });
         }
 
         if (this.coinbase) {
-            this.app.post(`${basePath}/coinbase/charge`, createMw, async (req, res) => {
-                try {
-                    const result = await this.coinbase.createCharge(req.body);
-                    if (onPaymentCreate) await onPaymentCreate(req, result);
-                    res.json({ ok: true, ...result });
-                } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
-                }
-            });
-
-            this.app.get(`${basePath}/coinbase/verify`, verifyMw, async (req, res) => {
+            this.app.get(`${basePath}/coinbase/verify`, async (req, res) => {
                 try {
                     const chargeCode = req.query.code;
-                    if (!chargeCode) return res.status(400).json({ ok: false, error: 'missing_code' });
-                    
+                    if (!chargeCode) return res.status(400).json({ok: false, error: 'missing_code'});
+
                     const result = await this.coinbase.verifyCharge(chargeCode);
-                    if (onPaymentVerify) await onPaymentVerify(req, result);
-                    res.json({ ok: true, ...result });
+                    res.json({ok: true, ...result});
                 } catch (error) {
-                    res.status(500).json({ ok: false, error: error.message });
+                    res.status(500).json({ok: false, error: error.message});
                 }
             });
 
@@ -808,18 +733,18 @@ export default class dSyncPay {
                             this.coinbase.config.webhookSecret
                         );
 
-                        if (!isValid) return res.status(401).json({ ok: false, error: 'invalid_signature' });
+                        if (!isValid) return res.status(401).json({ok: false, error: 'invalid_signature'});
 
                         const event = req.body;
-                        
+
                         if (event.event.type === 'charge:confirmed') {
                             const chargeId = event.event.data.id;
                             const result = await this.coinbase.verifyCharge(chargeId);
                         }
 
-                        res.status(200).json({ ok: true });
+                        res.status(200).json({ok: true});
                     } catch (error) {
-                        res.status(500).json({ ok: false, error: 'webhook_error' });
+                        res.status(500).json({ok: false, error: 'webhook_error'});
                     }
                 });
             }

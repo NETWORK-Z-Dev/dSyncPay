@@ -296,14 +296,24 @@ export default class dSyncPay {
 
                 const purchaseUnit = orderResponse.purchase_units?.[0] || {};
 
+                let amount = 0;
+                let customId = purchaseUnit.custom_id;
+
+                if (purchaseUnit.payments?.captures?.[0]) {
+                    amount = parseFloat(purchaseUnit.payments.captures[0].amount.value);
+                    customId = purchaseUnit.payments.captures[0].custom_id || purchaseUnit.custom_id;
+                } else if (purchaseUnit.amount?.value) {
+                    amount = parseFloat(purchaseUnit.amount.value);
+                }
+
                 const result = {
                     provider: 'paypal',
                     type: 'order',
                     status: orderStatus,
-                    transactionId: purchaseUnit.custom_id,
+                    transactionId: customId,
                     orderId: orderResponse.id,
-                    amount: parseFloat(purchaseUnit.amount?.value || 0),
-                    currency: purchaseUnit.amount?.currency_code || 'EUR',
+                    amount: amount,
+                    currency: purchaseUnit.payments?.captures?.[0]?.amount?.currency_code || purchaseUnit.amount?.currency_code || 'EUR',
                     rawResponse: orderResponse
                 };
 

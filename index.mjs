@@ -5,6 +5,13 @@ export default class dSyncPay {
                     app = null,
                     domain = null,
                     basePath = '/payments',
+                    redirects = {
+                        success: '/payment-success',
+                        error: '/payment-error',
+                        cancelled: '/payment-cancelled',
+                        subscriptionSuccess: '/subscription-success',
+                        subscriptionError: '/subscription-error'
+                    },
                     paypal = null,
                     coinbase = null,
                     onPaymentCreated = null,
@@ -22,6 +29,7 @@ export default class dSyncPay {
         this.app = app;
         this.domain = domain.endsWith('/') ? domain.slice(0, -1) : domain;
         this.basePath = basePath;
+        this.redirects = redirects;
 
         this.callbacks = {
             onPaymentCreated,
@@ -46,6 +54,7 @@ export default class dSyncPay {
         }
 
         this.registerRoutes(basePath);
+        this.registerRedirectRoutes();
     }
 
     getUrl(path) {
@@ -258,7 +267,7 @@ export default class dSyncPay {
             const accessToken = await this.getAccessToken();
 
             try {
-                const orderResponse = await this.parent.request(
+                let orderResponse = await this.parent.request(
                     `${this.baseUrl}/v2/checkout/orders/${orderId}`,
                     {
                         headers: {
@@ -267,10 +276,10 @@ export default class dSyncPay {
                     }
                 );
 
-                const orderStatus = orderResponse.status;
+                let orderStatus = orderResponse.status;
 
                 if (orderStatus === "APPROVED") {
-                    await this.parent.request(
+                    const captureResponse = await this.parent.request(
                         `${this.baseUrl}/v2/checkout/orders/${orderId}/capture`,
                         {
                             method: 'POST',
@@ -280,9 +289,12 @@ export default class dSyncPay {
                             body: {}
                         }
                     );
+
+                    orderStatus = captureResponse.status;
+                    orderResponse = captureResponse;
                 }
 
-                const purchaseUnit = orderResponse.purchase_units[0];
+                const purchaseUnit = orderResponse.purchase_units?.[0] || {};
 
                 const result = {
                     provider: 'paypal',
@@ -290,15 +302,17 @@ export default class dSyncPay {
                     status: orderStatus,
                     transactionId: purchaseUnit.custom_id,
                     orderId: orderResponse.id,
-                    amount: parseFloat(purchaseUnit.amount.value),
-                    currency: purchaseUnit.amount.currency_code,
+                    amount: parseFloat(purchaseUnit.amount?.value || 0),
+                    currency: purchaseUnit.amount?.currency_code || 'EUR',
                     rawResponse: orderResponse
                 };
 
                 if (orderStatus === 'COMPLETED') {
                     this.parent.emit('onPaymentCompleted', result);
-                } else if (orderStatus === 'VOIDED') {
+                } else if (orderStatus === 'VOIDED' || orderStatus === 'CANCELLED') {
                     this.parent.emit('onPaymentCancelled', result);
+                } else {
+                    this.parent.emit('onPaymentFailed', result);
                 }
 
                 return result;
@@ -679,6 +693,28 @@ export default class dSyncPay {
         }
     }
 
+    registerRedirectRoutes() {
+        this.app.get(this.redirects.success, (req, res) => {
+            res.send('payment successful! thank you.');
+        });
+
+        this.app.get(this.redirects.error, (req, res) => {
+            res.send('payment failed. please try again.');
+        });
+
+        this.app.get(this.redirects.cancelled, (req, res) => {
+            res.send('payment cancelled.');
+        });
+
+        this.app.get(this.redirects.subscriptionSuccess, (req, res) => {
+            res.send('subscription activated!');
+        });
+
+        this.app.get(this.redirects.subscriptionError, (req, res) => {
+            res.send('subscription failed.');
+        });
+    }
+
     registerRoutes(basePath = '/payments') {
         if (this.paypal) {
             this.app.get(`${basePath}/paypal/verify`, async (req, res) => {
@@ -687,9 +723,14 @@ export default class dSyncPay {
                     if (!orderId) return res.status(400).json({ok: false, error: 'missing_token'});
 
                     const result = await this.paypal.verifyOrder(orderId);
-                    res.json({ok: true, ...result});
+
+                    if (result.status === 'COMPLETED') {
+                        return res.redirect(this.redirects.success);
+                    } else {
+                        return res.redirect(this.redirects.error);
+                    }
                 } catch (error) {
-                    res.status(500).json({ok: false, error: error.message});
+                    return res.redirect(this.redirects.error);
                 }
             });
 
@@ -699,14 +740,25 @@ export default class dSyncPay {
                     if (!subscriptionId) return res.status(400).json({ok: false, error: 'missing_subscription_id'});
 
                     const result = await this.paypal.verifySubscription(subscriptionId);
-                    res.json({ok: true, ...result});
+
+                    if (result.status === 'ACTIVE') {
+                        return res.redirect(this.redirects.subscriptionSuccess);
+                    } else {
+                        return res.redirect(this.redirects.subscriptionError);
+                    }
                 } catch (error) {
-                    res.status(500).json({ok: false, error: error.message});
+                    return res.redirect(this.redirects.subscriptionError);
                 }
             });
 
             this.app.get(`${basePath}/cancel`, async (req, res) => {
-                res.send('payment cancelled');
+                const orderId = req.query.token;
+                if (orderId) {
+                    try {
+                        await this.paypal.verifyOrder(orderId);
+                    } catch (e) {}
+                }
+                return res.redirect(this.redirects.cancelled);
             });
         }
 
@@ -717,9 +769,14 @@ export default class dSyncPay {
                     if (!chargeCode) return res.status(400).json({ok: false, error: 'missing_code'});
 
                     const result = await this.coinbase.verifyCharge(chargeCode);
-                    res.json({ok: true, ...result});
+
+                    if (result.status === 'COMPLETED') {
+                        return res.redirect(this.redirects.success);
+                    } else {
+                        return res.redirect(this.redirects.error);
+                    }
                 } catch (error) {
-                    res.status(500).json({ok: false, error: error.message});
+                    return res.redirect(this.redirects.error);
                 }
             });
 
@@ -739,7 +796,7 @@ export default class dSyncPay {
 
                         if (event.event.type === 'charge:confirmed') {
                             const chargeId = event.event.data.id;
-                            const result = await this.coinbase.verifyCharge(chargeId);
+                            await this.coinbase.verifyCharge(chargeId);
                         }
 
                         res.status(200).json({ok: true});

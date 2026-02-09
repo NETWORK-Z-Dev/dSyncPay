@@ -4,11 +4,12 @@ As another part of the dSync library family this library is responsible for paym
 
 > [!NOTE]
 >
-> Payment Providers may take a cut from your money or have other fees that are outside of this library's control. 
+> Payment Providers may take a cut from your money or have other fees that are outside of this library's control.
 
 ------
 
 ## Setup
+
 ```js
 import dSyncPay from '@hackthedev/dsync-pay';
 
@@ -17,6 +18,13 @@ const payments = new dSyncPay({
     app,
     domain: 'https://domain.com',
     basePath: '/payments', // optional, default is '/payments'
+    redirects: { // optional, customize redirect pages
+        success: '/payment-success',
+        error: '/payment-error',
+        cancelled: '/payment-cancelled',
+        subscriptionSuccess: '/subscription-success',
+        subscriptionError: '/subscription-error'
+    },
     paypal: {
         clientId: 'xxx',
         clientSecret: 'xxx',
@@ -138,17 +146,33 @@ const result = await payments.coinbase.verifyCharge(chargeCode);
 
 ## Routes
 
-dSyncPay automatically creates verification routes for handling payment returns as well to make the entire payment process as simple and straight forward as possible.
+dSyncPay automatically creates verification routes and redirect pages for handling payment returns to make the entire payment process as simple and straight forward as possible.
 
-### PayPal
-* `GET /payments/paypal/verify?token=xxx`
-* `GET /payments/paypal/subscription/verify?subscription_id=xxx`
-* `GET /payments/cancel`
+### Verification Routes
 
-### Coinbase
-* `GET /payments/coinbase/verify?code=xxx`
-* `POST /payments/webhook/coinbase` (if webhookSecret set)
-* `GET /payments/cancel`
+#### PayPal
+
+- `GET /payments/paypal/verify?token=xxx`
+- `GET /payments/paypal/subscription/verify?subscription_id=xxx`
+- `GET /payments/cancel`
+
+#### Coinbase
+
+- `GET /payments/coinbase/verify?code=xxx`
+- `POST /payments/webhook/coinbase` (if webhookSecret set)
+- `GET /payments/cancel`
+
+### Auto-Generated Redirect Pages
+
+The library automatically creates simple redirect pages at:
+
+- `GET /payment-success` - shown after successful payment
+- `GET /payment-error` - shown when payment fails
+- `GET /payment-cancelled` - shown when user cancels payment
+- `GET /subscription-success` - shown after successful subscription
+- `GET /subscription-error` - shown when subscription fails
+
+You can customize these redirect URLs in the constructor with the `redirects` parameter.
 
 ### Usage Example
 
@@ -161,18 +185,27 @@ const order = await payments.paypal.createOrder({
 // redirect user to order.approvalUrl
 // paypal redirects back to /payments/paypal/verify?token=XXX
 // route automatically verifies and triggers onPaymentCompleted
+// then redirects to /payment-success
 ```
 
-### Custom Base Path
+### Custom Configuration
 
 ```javascript
 const payments = new dSyncPay({
     app,
     domain: 'https://domain.com',
     basePath: '/api/pay', // default is '/payments'
+    redirects: {
+        success: '/custom/success',
+        error: '/custom/error',
+        cancelled: '/custom/cancelled',
+        subscriptionSuccess: '/custom/sub-success',
+        subscriptionError: '/custom/sub-error'
+    },
     paypal: { ... }
 });
 
 // routes: /api/pay/paypal/verify, /api/pay/coinbase/verify, etc.
 // auto urls: https://domain.com/api/pay/paypal/verify
+// redirect pages: /custom/success, /custom/error, etc.
 ```

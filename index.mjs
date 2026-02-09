@@ -724,7 +724,7 @@ export default class dSyncPay {
         });
     }
 
-    registerRoutes(basePath = '/payments') {
+    registerRoutes(basePath = '/payments') { 
         if (this.paypal) {
             this.app.get(`${basePath}/paypal/verify`, async (req, res) => {
                 try {

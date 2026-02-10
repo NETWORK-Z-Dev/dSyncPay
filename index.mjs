@@ -1,4 +1,10 @@
 import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default class dSyncPay {
     constructor({
@@ -43,6 +49,9 @@ export default class dSyncPay {
             onError
         };
 
+        this.webPath = path.join(__dirname, "web");
+        if(!fs.existsSync(this.webPath)) throw new Error("missing web path");
+
         if (paypal) {
             if (!paypal.clientId) throw new Error("missing paypal.clientId");
             if (!paypal.clientSecret) throw new Error("missing paypal.clientSecret");
@@ -53,6 +62,11 @@ export default class dSyncPay {
             if (!coinbase.apiKey) throw new Error("missing coinbase.apiKey");
             this.coinbase = new this.Coinbase(this, coinbase);
         }
+
+        // serve static files from web/ folder
+        this.app.get(`${this.basePath}/payment-status.html`, (req, res) => {
+            res.sendFile(path.join(__dirname, "web", "payment-status.html"));
+        });
 
         this.registerRoutes(basePath);
         this.registerRedirectRoutes();
@@ -102,7 +116,7 @@ export default class dSyncPay {
 
         const fetchOptions = {
             method,
-            headers: {...headers}
+            headers: { ...headers }
         };
 
         if (auth) {
@@ -252,10 +266,8 @@ export default class dSyncPay {
                     rawResponse: response
                 };
 
-                // save metadata in cache
                 this.parent.metadataCache.set(response.id, metadata);
 
-                // auto cleanup after 1 hour if never verified
                 setTimeout(() => {
                     this.parent.metadataCache.delete(response.id);
                 }, 60 * 60 * 1000);
@@ -315,7 +327,6 @@ export default class dSyncPay {
                     amount = parseFloat(purchaseUnit.amount.value);
                 }
 
-                // get metadata from cache
                 const metadata = this.parent.metadataCache.get(orderId) || {};
 
                 const result = {
@@ -338,7 +349,6 @@ export default class dSyncPay {
                     await this.parent.emit('onPaymentFailed', result);
                 }
 
-                // cleanup cache after verify
                 this.parent.metadataCache.delete(orderId);
 
                 return result;
@@ -350,7 +360,6 @@ export default class dSyncPay {
                     error: error.response || error.message
                 });
 
-                // cleanup cache after verify
                 this.parent.metadataCache.delete(orderId);
 
                 throw error;
@@ -501,10 +510,8 @@ export default class dSyncPay {
                     rawResponse: response
                 };
 
-                // save metadata in cache
                 this.parent.metadataCache.set(response.id, metadata);
 
-                // auto cleanup after 1 hour if never verified
                 setTimeout(() => {
                     this.parent.metadataCache.delete(response.id);
                 }, 60 * 60 * 1000);
@@ -534,7 +541,6 @@ export default class dSyncPay {
                     }
                 );
 
-                // get metadata from cache
                 const metadata = this.parent.metadataCache.get(subscriptionId) || {};
 
                 const result = {
@@ -554,7 +560,6 @@ export default class dSyncPay {
                     await this.parent.emit('onSubscriptionCancelled', result);
                 }
 
-                // cleanup cache after verify
                 this.parent.metadataCache.delete(subscriptionId);
 
                 return result;
@@ -566,7 +571,6 @@ export default class dSyncPay {
                     error: error.response || error.message
                 });
 
-                // cleanup cache after verify
                 this.parent.metadataCache.delete(subscriptionId);
 
                 throw error;
@@ -585,11 +589,10 @@ export default class dSyncPay {
                             "Content-Type": "application/json",
                             "Authorization": `Bearer ${accessToken}`
                         },
-                        body: {reason}
+                        body: { reason }
                     }
                 );
 
-                // get metadata from cache
                 const metadata = this.parent.metadataCache.get(subscriptionId) || {};
 
                 const result = {
@@ -601,7 +604,6 @@ export default class dSyncPay {
                     metadata
                 };
 
-                // cleanup cache
                 this.parent.metadataCache.delete(subscriptionId);
 
                 await this.parent.emit('onSubscriptionCancelled', result);
@@ -614,7 +616,6 @@ export default class dSyncPay {
                     error: error.response || error.message
                 });
 
-                // cleanup cache on error too
                 this.parent.metadataCache.delete(subscriptionId);
 
                 throw error;
@@ -755,23 +756,28 @@ export default class dSyncPay {
 
     registerRedirectRoutes() {
         this.app.get(this.redirects.success, (req, res) => {
-            res.send('payment successful! thank you.');
+            const query = new URLSearchParams({ ...req.query, status: 'success' }).toString();
+            return res.redirect(`${this.basePath}/payment-status.html?${query}`);
         });
 
         this.app.get(this.redirects.error, (req, res) => {
-            res.send('payment failed. please try again.');
+            const query = new URLSearchParams({ ...req.query, status: 'error' }).toString();
+            return res.redirect(`${this.basePath}/payment-status.html?${query}`);
         });
 
         this.app.get(this.redirects.cancelled, (req, res) => {
-            res.send('payment cancelled.');
+            const query = new URLSearchParams({ ...req.query, status: 'cancelled' }).toString();
+            return res.redirect(`${this.basePath}/payment-status.html?${query}`);
         });
 
         this.app.get(this.redirects.subscriptionSuccess, (req, res) => {
-            res.send('subscription activated!');
+            const query = new URLSearchParams({ ...req.query, status: 'success', type: 'subscription' }).toString();
+            return res.redirect(`${this.basePath}/payment-status.html?${query}`);
         });
 
         this.app.get(this.redirects.subscriptionError, (req, res) => {
-            res.send('subscription failed.');
+            const query = new URLSearchParams({ ...req.query, status: 'error', type: 'subscription' }).toString();
+            return res.redirect(`${this.basePath}/payment-status.html?${query}`);
         });
     }
 
@@ -780,12 +786,18 @@ export default class dSyncPay {
             this.app.get(`${basePath}/paypal/verify`, async (req, res) => {
                 try {
                     const orderId = req.query.token;
-                    if (!orderId) return res.status(400).json({ok: false, error: 'missing_token'});
+                    if (!orderId) return res.status(400).json({ ok: false, error: 'missing_token' });
 
                     const result = await this.paypal.verifyOrder(orderId);
 
                     if (result.status === 'COMPLETED') {
-                        return res.redirect(this.redirects.success);
+                        const query = new URLSearchParams({
+                            payment_id: orderId,
+                            provider: 'paypal',
+                            amount: result.amount,
+                            currency: result.currency
+                        }).toString();
+                        return res.redirect(`${this.redirects.success}?${query}`);
                     } else {
                         return res.redirect(this.redirects.error);
                     }
@@ -797,12 +809,16 @@ export default class dSyncPay {
             this.app.get(`${basePath}/paypal/subscription/verify`, async (req, res) => {
                 try {
                     const subscriptionId = req.query.subscription_id;
-                    if (!subscriptionId) return res.status(400).json({ok: false, error: 'missing_subscription_id'});
+                    if (!subscriptionId) return res.status(400).json({ ok: false, error: 'missing_subscription_id' });
 
                     const result = await this.paypal.verifySubscription(subscriptionId);
 
                     if (result.status === 'ACTIVE') {
-                        return res.redirect(this.redirects.subscriptionSuccess);
+                        const query = new URLSearchParams({
+                            payment_id: subscriptionId,
+                            provider: 'paypal'
+                        }).toString();
+                        return res.redirect(`${this.redirects.subscriptionSuccess}?${query}`);
                     } else {
                         return res.redirect(this.redirects.subscriptionError);
                     }
@@ -826,12 +842,18 @@ export default class dSyncPay {
             this.app.get(`${basePath}/coinbase/verify`, async (req, res) => {
                 try {
                     const chargeCode = req.query.code;
-                    if (!chargeCode) return res.status(400).json({ok: false, error: 'missing_code'});
+                    if (!chargeCode) return res.status(400).json({ ok: false, error: 'missing_code' });
 
                     const result = await this.coinbase.verifyCharge(chargeCode);
 
                     if (result.status === 'COMPLETED') {
-                        return res.redirect(this.redirects.success);
+                        const query = new URLSearchParams({
+                            payment_id: result.chargeId,
+                            provider: 'coinbase',
+                            amount: result.amount,
+                            currency: result.currency
+                        }).toString();
+                        return res.redirect(`${this.redirects.success}?${query}`);
                     } else {
                         return res.redirect(this.redirects.error);
                     }
@@ -850,7 +872,7 @@ export default class dSyncPay {
                             this.coinbase.config.webhookSecret
                         );
 
-                        if (!isValid) return res.status(401).json({ok: false, error: 'invalid_signature'});
+                        if (!isValid) return res.status(401).json({ ok: false, error: 'invalid_signature' });
 
                         const event = req.body;
 
@@ -859,9 +881,9 @@ export default class dSyncPay {
                             await this.coinbase.verifyCharge(chargeId);
                         }
 
-                        res.status(200).json({ok: true});
+                        res.status(200).json({ ok: true });
                     } catch (error) {
-                        res.status(500).json({ok: false, error: 'webhook_error'});
+                        res.status(500).json({ ok: false, error: 'webhook_error' });
                     }
                 });
             }

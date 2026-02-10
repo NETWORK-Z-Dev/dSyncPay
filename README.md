@@ -1,6 +1,6 @@
 # dSyncPay
 
-As another part of the dSync library family this library is responsible for payment handling currently supporting PayPal and Coinbase Crypto payments. Its works independently and without any percentage cuts by using your own API keys.
+As another part of the dSync library family this library is responsible for payment handling currently supporting PayPal and Coinbase Crypto payments. It works independently and without any percentage cuts by using your own API keys.
 
 > [!NOTE]
 >
@@ -31,11 +31,11 @@ const payments = new dSyncPay({
         sandbox: true // or false for production
     },
     coinbase: {
-        apiKey: 'xxx',
-        webhookSecret: 'xxx' // optional
+        apiKey: 'xxx',        // coinbase commerce API key
+        webhookSecret: 'xxx'  // optional, for webhook verification
     },
-    
-    // events from the library
+
+    // events
     onPaymentCreated: (data) => {},
     onPaymentCompleted: (data) => {},
     onPaymentFailed: (data) => {},
@@ -47,6 +47,10 @@ const payments = new dSyncPay({
 });
 ```
 
+### Coinbase API Key
+
+dSyncPay uses **Coinbase Commerce** for crypto payments - not the Coinbase exchange or developer platform. Get your API key at `https://commerce.coinbase.com/settings/security`.
+
 ------
 
 ## PayPal Usage
@@ -54,60 +58,81 @@ const payments = new dSyncPay({
 ### Create an order
 
 ```js
-// returnUrl and cancelUrl are auto-generated based on domain + basePath
-const payment = await payments.paypal.createOrder({
-    title: 'product name',
-    price: 19.99
-    // returnUrl automatically becomes https://domain.com/payments/paypal/verify
-    // cancelUrl will become https://domain.com/payments/cancel
-});
-
-// or override manually
 const payment = await payments.paypal.createOrder({
     title: 'product name',
     price: 19.99,
-    returnUrl: 'https://custom.com/success',
-    cancelUrl: 'https://custom.com/cancel',
-    metadata: { userId: '123' }
+    // optional params:
+    description: 'product description',   // default: 'no description'
+    quantity: 1,                           // default: 1
+    currency: 'EUR',                       // default: 'EUR'
+    customId: 'your-custom-id',           // default: auto-generated 17-digit id
+    metadata: { userId: '123' },          // passed through to onPaymentCompleted
+    returnUrl: 'https://custom.com/ok',   // default: https://domain.com/payments/paypal/verify
+    cancelUrl: 'https://custom.com/no'    // default: https://domain.com/payments/cancel
 });
 
-// manual verify. result.status === 'COMPLETED'. see paypal api.
+// redirect user to:
+payment.approvalUrl
+
+// result object:
+{
+    provider: 'paypal',
+    type: 'order',
+    approvalUrl: '...',
+    transactionId: 'customId',
+    orderId: '...',
+    amount: 19.99,
+    currency: 'EUR',
+    metadata: {},
+    rawResponse: {}
+}
+```
+
+> [!NOTE] 
+>
+> metadata is cached in memory for 1 hour and passed through to the payment callbacks automatically.
+
+### Verify an order manually
+
+```js
 const result = await payments.paypal.verifyOrder(orderId);
+// result.status === 'COMPLETED'
 ```
 
 ### Managing subscriptions
 
 ```js
-// requires you to setup a plan one time
+// step 1: create a plan (one time setup)
 const plan = await payments.paypal.createPlan({
     name: 'monthly premium',
     price: 9.99,
-    interval: 'MONTH'
-});	
-// save plan.planId
-
-// then you can create subscriptions based on that plan
-const sub = await payments.paypal.createSubscription({
-    planId: 'P-xxxxx'
-    // returnUrl becomes https://domain.com/payments/paypal/subscription/verify
-    // cancelUrl becomes https://domain.com/payments/cancel
+    interval: 'MONTH',       // MONTH, YEAR, WEEK, DAY
+    // optional:
+    description: '...',
+    currency: 'EUR',         // default: 'EUR'
+    frequency: 1             // default: 1
 });
+// save plan.planId for later use
 
-// or override manually
+// step 2: create a subscription
 const sub = await payments.paypal.createSubscription({
     planId: 'P-xxxxx',
-    returnUrl: 'https://custom.com/success',
-    cancelUrl: 'https://custom.com/cancel'
+    // optional:
+    customId: 'your-custom-id',
+    metadata: { userId: '123' },
+    returnUrl: 'https://custom.com/success',  // default: https://domain.com/payments/paypal/subscription/verify
+    cancelUrl: 'https://custom.com/cancel'    // default: https://domain.com/payments/cancel
 });
 
-// redirect to sub.approvalUrl
-// also returns sub.subscriptionId
+// redirect user to:
+sub.approvalUrl
+// also available: sub.subscriptionId
 
-// manually verify subscription
+// step 3: verify subscription manually
 const result = await payments.paypal.verifySubscription(subscriptionId);
 // result.status === 'ACTIVE'
 
-// cancel subscription
+// cancel a subscription
 await payments.paypal.cancelSubscription(subscriptionId, 'reason');
 ```
 
@@ -118,26 +143,38 @@ await payments.paypal.cancelSubscription(subscriptionId, 'reason');
 ### Creating a charge
 
 ```js
-// redirectUrl and cancelUrl are auto-generated
-const charge = await payments.coinbase.createCharge({
-    title: 'product name',
-    price: 19.99
-    // redirectUrl becomes  https://domain.com/payments/coinbase/verify
-    // cancelUrl becomes https://domain.com/payments/cancel
-});
-
-// or override manually
 const charge = await payments.coinbase.createCharge({
     title: 'product name',
     price: 19.99,
-    redirectUrl: 'https://custom.com/success',
-    cancelUrl: 'https://custom.com/cancel',
-    metadata: { userId: '123' }
+    // optional:
+    description: 'product description',   // default: 'no description'
+    quantity: 1,                           // default: 1
+    currency: 'EUR',                       // default: 'EUR'
+    metadata: { userId: '123' },
+    redirectUrl: 'https://custom.com/ok', // default: https://domain.com/payments/coinbase/verify
+    cancelUrl: 'https://custom.com/no'    // default: https://domain.com/payments/cancel
 });
 
-// redirect to: charge.hostedUrl
+// redirect user to:
+charge.hostedUrl
 
-// manually verify
+// result object:
+{
+    provider: 'coinbase',
+    type: 'charge',
+    hostedUrl: '...',
+    chargeId: '...',
+    chargeCode: '...',
+    amount: 19.99,
+    currency: 'EUR',
+    metadata: {},
+    rawResponse: {}
+}
+```
+
+### Verify a charge manually
+
+```js
 const result = await payments.coinbase.verifyCharge(chargeCode);
 // result.status === 'COMPLETED'
 ```
@@ -146,7 +183,7 @@ const result = await payments.coinbase.verifyCharge(chargeCode);
 
 ## Routes
 
-dSyncPay automatically creates verification routes and redirect pages for handling payment returns to make the entire payment process as simple and straight forward as possible.
+dSyncPay automatically registers verification routes that handle payment returns from PayPal and Coinbase.
 
 ### Verification Routes
 
@@ -159,42 +196,38 @@ dSyncPay automatically creates verification routes and redirect pages for handli
 #### Coinbase
 
 - `GET /payments/coinbase/verify?code=xxx`
-- `POST /payments/webhook/coinbase` (if webhookSecret set)
+- `POST /payments/webhook/coinbase` (only registered if `webhookSecret` is set)
 - `GET /payments/cancel`
 
-### Auto-Generated Redirect Pages
+### Status Page
 
-The library automatically creates simple redirect pages at:
+After a payment is completed, failed, or cancelled, the user is redirected to a built-in status page at:
 
-- `GET /payment-success` - shown after successful payment
-- `GET /payment-error` - shown when payment fails
-- `GET /payment-cancelled` - shown when user cancels payment
-- `GET /subscription-success` - shown after successful subscription
-- `GET /subscription-error` - shown when subscription fails
-
-You can customize these redirect URLs in the constructor with the `redirects` parameter.
-
-### Usage Example
-
-```javascript
-const order = await payments.paypal.createOrder({
-    title: 'premium plan',
-    price: 19.99
-});
-
-// redirect user to order.approvalUrl
-// paypal redirects back to /payments/paypal/verify?token=XXX
-// route automatically verifies and triggers onPaymentCompleted
-// then redirects to /payment-success
+```
+GET /payments/payment-status.html?status=success&provider=paypal&amount=19.99&currency=EUR
 ```
 
-### Custom Configuration
+The `status` query param controls what is shown:
 
-```javascript
+| status      | description                       |
+| ----------- | --------------------------------- |
+| `success`   | payment or subscription completed |
+| `error`     | payment failed                    |
+| `cancelled` | user cancelled                    |
+
+Additional query params (`payment_id`, `provider`, `amount`, `currency`, `type`) are passed through automatically and displayed on the page.
+
+You can customize where users land before the status page using the `redirects` option in the constructor. These are intermediate routes that pass through query params and redirect to the status page.
+
+------
+
+## Custom Configuration
+
+```js
 const payments = new dSyncPay({
     app,
     domain: 'https://domain.com',
-    basePath: '/api/pay', // default is '/payments'
+    basePath: '/api/pay',   // default: '/payments'
     redirects: {
         success: '/custom/success',
         error: '/custom/error',
@@ -205,7 +238,24 @@ const payments = new dSyncPay({
     paypal: { ... }
 });
 
-// routes: /api/pay/paypal/verify, /api/pay/coinbase/verify, etc.
-// auto urls: https://domain.com/api/pay/paypal/verify
-// redirect pages: /custom/success, /custom/error, etc.
+// verification routes: /api/pay/paypal/verify, /api/pay/coinbase/verify, etc.
+// auto-generated return urls: https://domain.com/api/pay/paypal/verify
+// status page: /api/pay/payment-status.html
 ```
+
+------
+
+## Events
+
+All callbacks receive a data object with at minimum `provider`, `type`, `status`, `metadata`, and `rawResponse`.
+
+| event                     | trigger                               |
+| ------------------------- | ------------------------------------- |
+| `onPaymentCreated`        | order or charge was created           |
+| `onPaymentCompleted`      | payment verified as completed         |
+| `onPaymentFailed`         | payment failed or expired             |
+| `onPaymentCancelled`      | user cancelled payment                |
+| `onSubscriptionCreated`   | subscription was created              |
+| `onSubscriptionActivated` | subscription verified as active       |
+| `onSubscriptionCancelled` | subscription was cancelled            |
+| `onError`                 | internal error (auth, api call, etc.) |

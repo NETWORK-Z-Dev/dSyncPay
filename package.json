@@ -1,6 +1,6 @@
 {
   "name": "@hackthedev/dsync-pay",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "As another part of the dSync library family this library is responsible for payment handling currently supporting PayPal and Coinbase Crypto payments. Its works independently and without any percentage cuts by using your own API keys.",
   "homepage": "https://github.com/NETWORK-Z-Dev/dSyncPay#readme",
   "bugs": {
